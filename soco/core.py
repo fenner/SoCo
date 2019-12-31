@@ -9,6 +9,7 @@ from __future__ import absolute_import, unicode_literals
 import datetime
 import logging
 import re
+import os
 import socket
 from functools import wraps
 from xml.sax.saxutils import escape
@@ -281,12 +282,12 @@ class SoCo(_SocoSingletonBase):
     @property
     def player_name(self):
         """str: The speaker's name."""
-        # We could get the name like this:
-        # result = self.deviceProperties.GetZoneAttributes()
-        # return result["CurrentZoneName"]
-        # but it is probably quicker to get it from the group topology
-        # and take advantage of any caching
         self._parse_zone_group_state()
+        if self._player_name is None:
+            # The zone config handling failed.
+            # Fetch it from the player directly.
+            result = self.deviceProperties.GetZoneAttributes()
+            return result["CurrentZoneName"]
         return self._player_name
 
     @player_name.setter
@@ -945,6 +946,13 @@ class SoCo(_SocoSingletonBase):
 
         Retrieve and parse it, and populate the relevant properties.
         """
+        # In networks with more than a certain number of speakers,
+        # the GetZoneGroupState RPC fails.  So that people without
+        # as many speakers can test the alternate code, if
+        # SOCO_TOO_BIG is present in the environment, we pretend
+        # that this failed.
+        if 'SOCO_TOO_BIG' in os.environ:
+            return
 
 # zoneGroupTopology.GetZoneGroupState()['ZoneGroupState'] returns XML like
 # this:
@@ -1014,8 +1022,20 @@ class SoCo(_SocoSingletonBase):
         # Maintain a private cache. If the zgt has not changed, there is no
         # need to repeat all the XML parsing. In addition, switch on network
         # caching for a short interval (5 secs).
-        zgs = self.zoneGroupTopology.GetZoneGroupState(
-            cache_timeout=5)['ZoneGroupState']
+        try:
+            zgs = self.zoneGroupTopology.GetZoneGroupState(
+                cache_timeout=5)['ZoneGroupState']
+        except SoCoUPnPException as e:
+            if e.error_code == '501':
+                # Once there are enough speakers in a network,
+                # the GetZoneGroupState RPC starts failing.
+                # SONOS does not use this in their controller, so
+                # this bug does not affect them.
+                # Just return, and let the fallback code in
+                # accessors query the devices on the fly.
+                return
+            raise
+
         if zgs == self._zgs_cache:
             return
         self._zgs_cache = zgs
