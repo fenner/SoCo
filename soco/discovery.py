@@ -130,6 +130,8 @@ def discover(timeout=5, include_invisible=False, interface_addr=None):
         for _sock in _sockets:
             _sock.sendto(really_utf8(PLAYER_SEARCH), (MCAST_GRP, MCAST_PORT))
 
+    retval = set()
+
     t0 = time.time()
     while True:
         # Check if the timeout is exceeded. We could do this check just
@@ -140,7 +142,10 @@ def discover(timeout=5, include_invisible=False, interface_addr=None):
         # is no monotonic timer available before Python 3.3.
         t1 = time.time()
         if t1 - t0 > timeout:
-            return None
+            if retval:
+                return retval
+            else:
+                return None
 
         # The timeout of the select call is set to be no greater than
         # 100ms, so as not to exceed (too much) the required timeout
@@ -179,6 +184,15 @@ def discover(timeout=5, include_invisible=False, interface_addr=None):
                     # Player's ability to find the others, than to wait for
                     # query responses from them ourselves.
                     zone = config.SOCO_CLASS(addr[0])
+                    # The attempt to find others may fail.  If there
+                    # are no zones in "all zones", this has failed
+                    # (this player must be in "all zones"), so we add the
+                    # player to the list and keep discovering until
+                    # timeout.
+                    if not zone.all_zones:
+                        retval.add( zone )
+                        continue
+
                     if include_invisible:
                         return zone.all_zones
                     else:
